@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from f3dasm._src.experimentdata._jobqueue import _JobQueue
+from f3dasm._src.experimentdata._jobqueue import Index as _JobQueue
 from f3dasm.design import NoOpenJobsError, Status
 
 pytestmark = pytest.mark.smoke
@@ -16,7 +16,7 @@ def sample_job_queue():
     yield job_queue
 
     # Reset the job queue to its original state after each test
-    job_queue.reset()
+    # job_queue.reset()
 
 
 @pytest.fixture

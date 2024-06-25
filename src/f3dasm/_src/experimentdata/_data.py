@@ -6,17 +6,12 @@ from __future__ import annotations
 # Standard
 from copy import deepcopy
 from pathlib import Path
-from typing import (Any, Dict, Iterable, Iterator, List, Optional, Tuple, Type,
-                    Union)
+from typing import Any, Dict, Iterable, List, Optional, Type, Union
 
 # Third-party
 import numpy as np
 import pandas as pd
 import xarray as xr
-
-# Local
-from ..design.domain import Domain
-from ._columns import _Columns
 
 #                                                          Authorship & Credits
 # =============================================================================
@@ -27,417 +22,494 @@ __status__ = 'Stable'
 #
 # =============================================================================
 
+MISSING_VALUE = np.nan
+
+# =============================================================================
+
 
 class _Data:
-    def __init__(self, data: Optional[pd.DataFrame] = None,
-                 columns: Optional[_Columns] = None):
-        if data is None:
-            data = pd.DataFrame()
+    def __init__(self, data: Dict[int, Dict[str, Any]] = None):
+        """
+        Initialize the _Data object.
 
-        if columns is None:
-            columns = _Columns({col: None for col in data.columns})
+        Parameters
+        ----------
+        data : Dict[int, Dict[str, Any]], optional
+            The data dictionary with integer keys and dictionaries as values.
+        """
+        self.data = data if data is not None else {}
 
-        self.columns: _Columns = columns
-        self.data = data.rename(
-            columns={name: i for i, name in enumerate(data.columns)})
+    def __len__(self) -> int:
+        """
+        Get the number of items in the data.
 
-    def __len__(self):
-        """The len() method returns the number of datapoints"""
+        Returns
+        -------
+        int
+            Number of items in the data.
+        """
         return len(self.data)
 
-    def __iter__(self) -> Iterator[Tuple[Dict[str, Any]]]:
-        self.current_index = 0
-        return self
-
-    def __next__(self):
-        if self.current_index >= len(self):
-            raise StopIteration
-        else:
-            index = self.data.index[self.current_index]
-            current_value = self.get_data_dict(index)
-            self.current_index += 1
-            return current_value
-
-    def __getitem__(self, index: int | Iterable[int]) -> _Data:
-        """Get a subset of the data.
-
-        Parameters
-        ----------
-        index : int, list
-            The index of the data to get.
+    def __iter__(self):
+        """
+        Get an iterator over the data values.
 
         Returns
         -------
-            A subset of the data.
+        iterator
+            Iterator over the data values.
         """
-        # If the object is empty, return itself
+        return iter(self.data.values())
+
+    def __getitem__(self, rows: int | slice | Iterable[int]) -> _Data:
+        """
+        Get a subset of the data.
+
+        Parameters
+        ----------
+        rows : int or slice or Iterable[int]
+            The rows to retrieve.
+
+        Returns
+        -------
+        _Data
+            The subset of the data.
+        """
+        if isinstance(rows, int):
+            rows = [rows]
+
+        return _Data({row: self.data.get(row, {}) for row in rows})
+
+    def __add__(self, __o: _Data) -> _Data:
+        """
+        Add another _Data object to this one.
+
+        Parameters
+        ----------
+        __o : _Data
+            The other _Data object.
+
+        Returns
+        -------
+        _Data
+            The combined _Data object.
+        """
         if self.is_empty():
-            return self
+            return __o
 
-        if isinstance(index, int):
-            index = [index]
-        return _Data(data=self.data.loc[index].copy(),
-                     columns=self.columns)
+        _data_copy = deepcopy(self)
+        other_data_copy = deepcopy(__o)
 
-    def __add__(self, other: _Data | Dict[str, Any]) -> _Data:
-        """Add two Data objects together.
+        new_indices = (np.array(range(len(__o))) + max(self.data) + 1).tolist()
 
-        Parameters
-        ----------
-        other : Data
-            The Data object to add.
-
-        Returns
-        -------
-            The sum of the two Data objects.
-        """
-        # If other is a dictionary, convert it to a _Data object
-        if isinstance(other, Dict):
-            other = _convert_dict_to_data(other)
-
-        try:
-            last_index = self.data.index[-1]
-        except IndexError:  # Empty DataFrame
-            # Make a copy of other.data
-            return _Data(data=other.data.copy(), columns=other.columns)
-
-        # Make a copy of other.data and modify its index
-        other_data_copy = other.data.copy()
-        other_data_copy.index = other_data_copy.index + last_index + 1
-        return _Data(pd.concat(
-            [self.data, other_data_copy]), columns=self.columns)
+        _data_copy.data.update({row: values for row, values in zip(
+            new_indices, other_data_copy.data.values())})
+        return _data_copy
 
     def __eq__(self, __o: _Data) -> bool:
-        return self.data.equals(__o.data)
+        """
+        Check if another _Data object is equal to this one.
+
+        Parameters
+        ----------
+        __o : _Data
+            The other _Data object.
+
+        Returns
+        -------
+        bool
+            True if the objects are equal, False otherwise.
+        """
+        return self.data == __o.data
 
     def _repr_html_(self) -> str:
+        """
+        Get the HTML representation of the data.
+
+        Returns
+        -------
+        str
+            The HTML representation of the data.
+        """
         return self.to_dataframe()._repr_html_()
+
+    def __repr__(self) -> str:
+        """
+        Get the string representation of the data.
+
+        Returns
+        -------
+        str
+            The string representation of the data.
+        """
+        return self.to_dataframe().__repr__()
+
 
 #                                                                    Properties
 # =============================================================================
 
+
     @property
     def indices(self) -> pd.Index:
-        return self.data.index
+        """
+        Get the indices of the data.
+
+        Returns
+        -------
+        List[int]
+            The list of indices.
+        """
+        return pd.Index(list(self.data.keys()))
 
     @property
     def names(self) -> List[str]:
-        return self.columns.names
+        """
+        Get the column names of the data.
 
-#                                                      Alternative constructors
+        Returns
+        -------
+        List[str]
+            The list of column names.
+        """
+        return self.to_dataframe().columns.tolist()
+
+    def is_empty(self) -> bool:
+        """
+        Check if the data is empty.
+
+        Returns
+        -------
+        bool
+            True if the data is empty, False otherwise.
+        """
+        return not bool(self.data)
+
+
+#                                                                Initialization
 # =============================================================================
 
+
     @classmethod
-    def from_indices(cls, indices: pd.Index) -> _Data:
-        """Create a Data object from a list of indices.
+    def from_indices(cls, rows: Iterable[int] | pd.Index) -> _Data:
+        """
+        Create a _Data object from a list of indices.
 
         Parameters
         ----------
-        indices : pd.Index
-            The indices of the data.
+        rows : Iterable[int]
+            The indices to create the _Data object from.
 
         Returns
         -------
-            Empty data object with indices
+        _Data
+            The created _Data object.
         """
-        return cls(pd.DataFrame(index=indices))
+        return cls({row: {} for row in rows})
 
     @classmethod
-    def from_domain(cls, domain: Domain) -> _Data:
-        """Create a Data object from a domain.
-
-        Parameters
-        ----------
-        design
-            _description_
-
-        Returns
-        -------
-            _description_
+    def from_file(cls, filename: Path) -> _Data:
         """
-        _dtypes = {index: parameter._type for index,
-                   (_, parameter) in enumerate(domain.space.items())}
-
-        df = pd.DataFrame(columns=range(len(domain))).astype(_dtypes)
-
-        # Set the categories tot the categorical parameters
-        for index, (name, categorical_input) in enumerate(
-                domain.categorical.space.items()):
-            df[index] = pd.Categorical(
-                df[index], categories=categorical_input.categories)
-
-        _columns = {name: None for name in domain.names}
-        return cls(df, columns=_Columns(_columns))
-
-    @classmethod
-    def from_file(cls, filename: Path | str) -> _Data:
-        """Loads the data from a file.
+        Create a _Data object from a file.
 
         Parameters
         ----------
         filename : Path
-            The filename to load the data from.
+            The file to read the data from.
+
+        Returns
+        -------
+        _Data
+            The created _Data object.
         """
-        file = Path(filename).with_suffix('.csv')
-        df = pd.read_csv(file, header=0, index_col=0)
-        _columns = {name: False for name in df.columns.to_list()}
-        # Reset the columns to be consistent
-        df.columns = range(df.columns.size)
-        return cls(df, columns=_Columns(_columns))
+        df = pd.read_csv(filename.with_suffix('.csv'), header=0, index_col=0)
+        return cls.from_dataframe(df)
 
     @classmethod
-    def from_numpy(cls: Type[_Data],
-                   array: np.ndarray, keys: Iterable[str]) -> _Data:
-        """Loads the data from a numpy array.
+    def from_numpy(cls: Type[_Data], array: np.ndarray,
+                   keys: Optional[Iterable[str]] = None) -> _Data:
+        """
+        Create a _Data object from a numpy array.
 
         Parameters
         ----------
         array : np.ndarray
-            The numpy array to load the data from.
-        data_type : str
+            The numpy array to create the _Data object from.
+        keys : Optional[Iterable[str]], optional
+            The keys for the columns of the data.
+
+        Returns
+        -------
+        _Data
+            The created _Data object.
         """
-        return cls(pd.DataFrame(array))
+        if keys is not None:
+            return _Data(
+                {index: {key: col for key, col in zip(keys, row)
+                         } for index, row in enumerate(array)})
+        else:
+            return _Data(
+                {index: {i: col for i, col in enumerate(row)
+                         } for index, row in enumerate(array)})
 
     @classmethod
-    def from_dataframe(cls, dataframe: pd.DataFrame) -> _Data:
-        """Loads the data from a dataframe.
+    def from_dataframe(cls, df: pd.DataFrame) -> _Data:
+        """
+        Create a _Data object from a pandas DataFrame.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            The dataframe to load the data from.
-        """
-        _columns = {name: None for name in dataframe.columns.to_list()}
-        return cls(dataframe, columns=_Columns(_columns))
+        df : pd.DataFrame
+            The DataFrame to create the _Data object from.
 
-#                                                                        Export
+        Returns
+        -------
+        _Data
+            The created _Data object.
+        """
+        return _Data(
+            {index: row.to_dict() for index, (_, row) in
+             enumerate(df.iterrows())})
+
+#                                                                     Exporting
 # =============================================================================
 
     def to_numpy(self) -> np.ndarray:
-        """Export the _Data object to a numpy array.
+        """
+        Convert the data to a numpy array.
 
         Returns
         -------
         np.ndarray
-            numpy array with the data.
+            The numpy array representation of the data.
         """
-        return self.data.to_numpy(dtype=np.float32)
+        return self.to_dataframe().to_numpy()
 
-    def to_xarray(self, label: str) -> xr.DataArray:
-        """Export the _Data object to a xarray DataArray.
+    def to_xarray(self, label: str):
+        """
+        Convert the data to an xarray DataArray.
 
         Parameters
         ----------
         label : str
-            The name of the data.
+            The label for the xarray DataArray.
 
         Returns
         -------
         xr.DataArray
-            xarray DataArray with the data.
+            The xarray DataArray representation of the data.
         """
-        return xr.DataArray(self.data, dims=['iterations', label], coords={
-            'iterations': self.indices, label: self.names})
+        df = self.to_dataframe()
+        return xr.DataArray(
+            self.to_dataframe(), dims=['iterations', label], coords={
+                'iterations': df.index, label: df.columns})
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Export the _Data object to a pandas DataFrame.
+        """
+        Convert the data to a pandas DataFrame.
 
         Returns
         -------
         pd.DataFrame
-            pandas dataframe with the data.
+            The DataFrame representation of the data.
         """
-        df = deepcopy(self.data)
-        df.columns = self.names
-        return df.astype(object)
+        return pd.DataFrame(self.data).T
 
-    def store(self, filename: Path) -> None:
-        """Stores the data to a file.
+    def store(self, filename: Path):
+        """
+        Store the data to a file.
 
         Parameters
         ----------
         filename : Path
-            The filename to store the data to.
-
-        Note
-        ----
-        The data is stored as a csv file.
+            The file to store the data in.
         """
-        # TODO: The column information is not saved in the .csv!
         self.to_dataframe().to_csv(filename.with_suffix('.csv'))
 
-    def n_best_samples(self, nosamples: int,
-                       column_name: List[str] | str) -> pd.DataFrame:
-        """Returns the n best samples. We consider to be lower values better.
+    def get_data_dict(self, row: int) -> Dict[str, Any]:
+        """
+        Get the data dictionary for a specific row.
+
+        Parameters
+        ----------
+        row : int
+            The row to retrieve the data from.
+
+        Returns
+        -------
+        Dict[str, Any]
+            The data dictionary for the specified row.
+        """
+        return self.data[row]
+
+#                                                       Selecting and combining
+# =============================================================================
+
+    def select_columns(self, keys: Iterable[str] | str) -> _Data:
+        """
+        Select specific columns from the data.
+
+        Parameters
+        ----------
+        keys : Iterable[str] or str
+            The keys of the columns to select.
+
+        Returns
+        -------
+        _Data
+            The _Data object with only the selected columns.
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+
+        return _Data(
+            {index: {key: row.get(key, MISSING_VALUE) for key in keys}
+             for index, row in self.data.items()})
+
+    def drop(self, keys: Iterable[str] | str) -> _Data:
+        """
+        Drop specific columns from the data.
+
+        Parameters
+        ----------
+        keys : Iterable[str] or str
+            The keys of the columns to drop.
+
+        Returns
+        -------
+        _Data
+            The _Data object with the specified columns removed.
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+
+        for row in self:
+            for key in keys:
+                if key in row:
+                    del row[key]
+
+    def join(self, __o: _Data) -> _Data:
+        """
+        Join another _Data object with this one.
+
+        Parameters
+        ----------
+        __o : _Data
+            The other _Data object to join with this one.
+
+        Returns
+        -------
+        _Data
+            The combined _Data object.
+        """
+        _data = deepcopy(self)
+        for row, other_row in zip(_data, __o):
+            row.update(other_row)
+
+        return _data
+
+#                                                                     Modifying
+# =============================================================================
+
+    def n_best_samples(self, nosamples: int, key: str) -> pd.DataFrame:
+        """
+        Get the top N samples based on a specific key.
 
         Parameters
         ----------
         nosamples : int
-            The number of samples to return.
-        column_name : List[str] | str
-            The column name(s) to sort on. If this is a list; priority will \
-            be given on the first entry.
+            The number of samples to retrieve.
+        key : str
+            The key to sort the samples by.
 
         Returns
         -------
         pd.DataFrame
-            The n best samples.
+            The DataFrame with the top N samples.
         """
-        return self.data.nsmallest(
-            n=nosamples, columns=self.columns.iloc(column_name))
+        df = self.to_dataframe()
+        return df.nsmallest(n=nosamples, columns=key)
 
-    def select_columns(self, columns: Iterable[str] | str) -> _Data:
-        """Filter the data on the selected columns.
+    def add_column(self, key: str, exist_ok: bool = True):
+        """
+        Add a new column to the data with missing values.
 
         Parameters
         ----------
-        columns : Iterable[str] | str
-            The columns to select.
-
-        Returns
-        -------
-        _Data
-            The data only with the selected columns
+        key : str
+            The key for the new column.
         """
-        # This is necessary otherwise self.data[columns] will be a Series
-        if isinstance(columns, str):
-            columns = [columns]
-        _selected_columns = _Columns(
-            {column: self.columns.columns[column] for column in columns})
-        return _Data(
-            self.data[self.columns.iloc(columns)], columns=_selected_columns)
+        for row in self.data:
+            if not exist_ok and key in self.data[row]:
+                raise KeyError(f"Key '{key}' already exists in the data.")
+            self.data[row][key] = MISSING_VALUE
 
-    # TODO: Can we get rid of this method ?
-    def drop(self, columns: Iterable[str] | str) -> _Data:
-        """Drop the selected columns from the data.
+    def rename_columns(self, mapping: Dict[str, str]):
+        """
+        Rename columns in the data.
 
         Parameters
         ----------
-        columns : Iterable[str] | str
-            The columns to drop.
-
-        Returns
-        -------
-        _Data
-            The data without the selected columns
+        mapping : Dict[str, str]
+            The mapping of old to new column names.
         """
-        if isinstance(columns, str):
-            columns = [columns]
-        _selected_columns = _Columns(
-            {
-                name: None for name in self.columns.columns
-                if name not in columns})
-        return _Data(
-            data=self.data.drop(columns=self.columns.iloc(columns)),
-            columns=_selected_columns)
+        for row in self.data:
+            for old_key, new_key in mapping.items():
+                self.data[row][new_key] = self.data[row].pop(old_key)
 
-#                                                        Append and remove data
+    def remove(self, rows: Iterable[int]):
+        """
+        Remove specific rows from the data.
+
+        Parameters
+        ----------
+        rows : Iterable[int]
+            The rows to remove.
+        """
+        for row in rows:
+            del self.data[row]
+
+    def overwrite(self, rows: Iterable[int], __o: _Data):
+        """
+        Overwrite specific rows with data from another _Data object.
+
+        Parameters
+        ----------
+        rows : Iterable[int]
+            The rows to overwrite.
+        __o : _Data
+            The _Data object to overwrite the rows with.
+        """
+        for index, other_row in zip(rows, __o):
+            self.data[index] = other_row
+
+    def set_data(self, row: int, value: Any, key: str):
+        """
+        Set a specific value in the data.
+
+        Parameters
+        ----------
+        row : int
+            The row to set the value in.
+        value : Any
+            The value to set.
+        key : str
+            The key for the value.
+        """
+        self.data[row][key] = value
+
+    def reset_index(self, rows: Iterable[int] = None):
+        """
+        Reset the index of the data.
+
+        Parameters
+        ----------
+        rows : Iterable[int], optional
+            The rows to reset the index for.
+
+        """
+        self.data = {index: values for index, values in enumerate(self)}
+
 # =============================================================================
-
-    def add_column(self, name: str, exist_ok: bool = False):
-        if name in self.columns.names:
-            if not exist_ok:
-                raise ValueError(
-                    f"Column {name} already exists in the data. "
-                    "Set exist_ok to True to allow skipping existing columns.")
-            return
-
-        if self.data.columns.empty:
-            new_columns_index = 0
-        else:
-            new_columns_index = self.data.columns[-1] + 1
-
-        self.columns.add(name)
-        self.data[new_columns_index] = np.nan
-
-    def remove(self, indices: List[int]):
-        self.data = self.data.drop(indices)
-
-    def overwrite(self, indices: Iterable[int], other: _Data | Dict[str, Any]):
-        if isinstance(other, Dict):
-            other = _convert_dict_to_data(other)
-
-        for other_column in other.columns.names:
-            if other_column not in self.columns.names:
-                self.add_column(other_column)
-
-        self.data.update(other.data.set_index(pd.Index(indices)))
-
-    # TODO: Rename this method, it is not clear what it does
-    def join(self, __o: _Data) -> _Data:
-        """Join two Data objects together.
-
-        Parameters
-        ----------
-        __o : Data
-            The Data object to join.
-
-        Returns
-        -------
-            The joined Data object.
-        """
-        return _Data(
-            pd.concat([self.data, __o.data], axis=1, ignore_index=True),
-            columns=self.columns + __o.columns)
-
-#                                                           Getters and setters
-# =============================================================================
-
-    # TODO: Rename this method ? It is not clear what it does
-    def get_data_dict(self, index: int) -> Dict[str, Any]:
-        return self.to_dataframe().loc[index].to_dict()
-
-    def set_data(self, index: int, value: Any, column: Optional[str] = None):
-        # check if the index exists
-        if index not in self.data.index:
-            raise IndexError(f"Index {index} does not exist in the data.")
-
-        if column is None:
-            # Set the entire row to the values
-            self.data.loc[index] = value
-            return
-
-        elif column not in self.columns.names:
-            self.add_column(column)
-
-        _column_index = self.columns.iloc(column)[0]
-        try:
-            self.data.at[index, _column_index] = value
-        except ValueError:
-            self.data = self.data.astype(object)
-            self.data.at[index, _column_index] = value
-
-    def reset_index(self, indices: Optional[Iterable[int]] = None) -> None:
-        """Reset the index of the data.
-
-        Parameters
-        ----------
-        indices : Optional[Iterable[int]], optional
-            The indices to reset, by default None
-
-        Note
-        ----
-        If indices is None, the entire index will be reset to a RangeIndex
-        with the same length as the data.
-        """
-        if indices is None:
-            self.data.reset_index(drop=True, inplace=True)
-        else:
-            self.data.index = indices
-
-    def is_empty(self) -> bool:
-        """Check if the data is empty."""
-        return self.data.empty
-
-    def get_index_with_nan(self) -> pd.Index:
-        """Get the indices with NaN values.
-
-        Returns
-        -------
-        pd.Index
-            The indices with NaN values.
-        """
-        return self.indices[self.data.isna().any(axis=1)]
 
 
 def _convert_dict_to_data(dictionary: Dict[str, Any]) -> _Data:
@@ -454,9 +526,9 @@ def _convert_dict_to_data(dictionary: Dict[str, Any]) -> _Data:
     _Data
         The data object.
     """
-    _columns = {name: None for name in dictionary.keys()}
-    df = pd.DataFrame(dictionary, index=[0]).copy()
-    return _Data(data=df, columns=_Columns(_columns))
+    return _Data({0: dictionary})
+
+# =============================================================================
 
 
 def _data_factory(data: DataTypes,
@@ -480,6 +552,8 @@ def _data_factory(data: DataTypes,
         raise TypeError(
             f"Data must be of type _Data, pd.DataFrame, np.ndarray, "
             f"Path or str, not {type(data)}")
+
+# =============================================================================
 
 
 DataTypes = Union[pd.DataFrame, np.ndarray, Path, str, _Data]

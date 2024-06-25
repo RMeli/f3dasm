@@ -10,10 +10,11 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from f3dasm import ExperimentData, ExperimentSample
+from f3dasm import ExperimentSample
 from f3dasm._src.design.parameter import _ContinuousParameter
 from f3dasm._src.experimentdata._data import DataTypes, _Data
-from f3dasm._src.experimentdata._jobqueue import _JobQueue
+from f3dasm._src.experimentdata._jobqueue import Index as _JobQueue
+from f3dasm._src.experimentdata.experimentdata import ExperimentData
 from f3dasm.design import Domain, Status, make_nd_continuous_domain
 
 pytestmark = pytest.mark.smoke
@@ -147,7 +148,7 @@ def test_to_numpy(experimentdata_continuous: ExperimentData, numpy_array: np.nda
     assert np.allclose(x, numpy_array)
 
 
-def test_to_xarray(experimentdata_continuous: ExperimentData, xarray_dataset: xr.DataSet):
+def test_to_xarray(experimentdata_continuous: ExperimentData, xarray_dataset: xr.Dataset):
     exported_dataset = experimentdata_continuous.to_xarray()
     # assert if xr_dataset is equal to xarray
     assert exported_dataset.equals(xarray_dataset)
